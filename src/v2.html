@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TestFlow</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body, #root { height: 100%; }
+  body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; overflow: hidden; }
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { border-radius: 3px; }
+  .light ::-webkit-scrollbar-thumb { background: #D1D5DB; }
+  .dark ::-webkit-scrollbar-thumb { background: #374151; }
+  .fade-in { animation: fadeIn 0.18s ease; }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(3px); } to { opacity:1; transform:translateY(0); } }
+  .panel-slide { transition: width 0.25s cubic-bezier(.4,0,.2,1), min-width 0.25s cubic-bezier(.4,0,.2,1); }
+  @media (max-width: 700px) {
+    .desktop-only { display: none !important; }
+  }
+  @media (min-width: 701px) {
+    .mobile-only { display: none !important; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const { useState, useRef, useCallback, useMemo, useEffect, useReducer, createElement: h, Fragment } = React;
+
+// ─── Theme ────────────────────────────────────────────────────────────────────
+function makeTheme(dark) {
+  return dark ? {
+    bg: '#0F1117', surface: '#1A1D27', surface2: '#22263A', surface3: '#2A2F45',
+    border: '#2E3347', borderStrong: '#3D4460',
+    text: '#F1F5F9', textSec: '#94A3B8', textMuted: '#5A6478',
+    blue: '#4B8EF0', blueSoft: '#1E2D4A', blueText: '#93BBFF',
+    green: '#34D399', greenSoft: '#0D2B1F', greenText: '#6EE7B7',
+    red: '#F87171', redSoft: '#2D1515', redText: '#FCA5A5',
+    amber: '#FBBF24', amberSoft: '#2D2009', amberText: '#FDE68A',
+    purple: '#A78BFA', purpleSoft: '#1F1535', purpleText: '#C4B5FD',
+    teal: '#2DD4BF', tealSoft: '#0D2926',
+    gray100: '#1E2132', gray200: '#252A3D', scrollThumb: '#374151',
+    inputBg: '#1E2132', shadow: 'rgba(0,0,0,0.5)',
+    navActive: '#1E2D4A', navActiveBorder: '#4B8EF0',
+    isDark: true,
+  } : {
+    bg: '#F4F6FB', surface: '#FFFFFF', surface2: '#F9FAFB', surface3: '#F1F5F9',
+    border: '#E5E7EB', borderStrong: '#D1D5DB',
+    text: '#111827', textSec: '#4B5563', textMuted: '#9CA3AF',
+    blue: '#1A6BCC', blueSoft: '#EBF2FF', blueText: '#1559AB',
+    green: '#059669', greenSoft: '#ECFDF5', greenText: '#047857',
+    red: '#DC2626', redSoft: '#FEF2F2', redText: '#B91C1C',
+    amber: '#D97706', amberSoft: '#FFFBEB', amberText: '#B45309',
+    purple: '#7C3AED', purpleSoft: '#F5F3FF', purpleText: '#6D28D9',
+    teal: '#0D9488', tealSoft: '#F0FDFA',
+    gray100: '#F3F4F6', gray200: '#E5E7EB', scrollThumb: '#D1D5DB',
+    inputBg: '#FFFFFF', shadow: 'rgba(0,0,0,0.12)',
+    navActive: '#EBF2FF', navActiveBorder: '#1A6BCC',
+    isDark: false,
+  };
+}
+
+const STATUS_META = {
+  pass:        { label:'Pass',        colorKey:'green',  icon:'✓' },
+  fail:        { label:'Fail',        colorKey:'red',    icon:'✗' },
+  pending:     { label:'Pending',     colorKey:'textMuted', icon:'○' },
+  blocked:     { label:'Blocked',     colorKey:'amber',  icon:'⊘' },
+  skipped:     { label:'Skipped',     colorKey:'purple', icon:'↷' },
+  'in-progress':{ label:'In Progress',colorKey:'blue',   icon:'◐' },
+};
+
+function uid() { return Math.random().toString(36).slice(2, 10); }
+function genTCId(pk, mk, n) { return `${pk}-${mk}-TC${String(n).padStart(3,'0')}`; }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function StatusBadge({ status, T, small }) {
+  const m = STATUS_META[status] || STATUS_META.pending;
+  const color = T[m.colorKey] || T.textMuted;
+  const bg = T[m.colorKey + 'Soft'] || T.gray100;
+  return h('span', { style: { display:'inline-flex', alignItems:'center', gap:3, padding: small?'2px 7px':'3px 10px', borderRadius:20, fontSize: small?10:12, fontWeight:600, color, background:bg, whiteSpace:'nowrap' } },
+    h('span', null, m.icon), ' ', m.label
+  );
+}
+
+function PriBadge({ p, T }) {
+  const meta = { high:{ c:T.red, bg:T.redSoft }, medium:{ c:T.amber, bg:T.amberSoft }, low:{ c:T.green, bg:T.greenSoft } };
+  const m = meta[p] || meta.medium;
+  return h('span', { style:{ fontSize:10, fontWeight:700, color:m.c, background:m.bg, padding:'1px 7px', borderRadius:20, textTransform:'uppercase', letterSpacing:0.5 } }, p);
+}
+
+function RunStatusBadge({ status, T }) {
+  const meta = { active:{ c:T.blue, bg:T.blueSoft }, completed:{ c:T.green, bg:T.greenSoft }, draft:{ c:T.textMuted, bg:T.gray100 } };
+  const m = meta[status] || meta.draft;
+  return h('span', { style:{ fontSize:11, fontWeight:600, color:m.c, background:m.bg, padding:'2px 8px', borderRadius:20 } }, status === 'active' ? 'Active' : status === 'completed' ? 'Completed' : 'Draft');
+}
+
+function Btn({ onClick, variant='ghost', children, style, disabled, title, T }) {
+  const base = { border:'1px solid', borderRadius:8, cursor:disabled?'not-allowed':'pointer', fontFamily:'inherit', fontSize:13, fontWeight:500, display:'inline-flex', alignItems:'center', gap:6, padding:'6px 14px', transition:'all 0.13s', opacity:disabled?0.45:1, outline:'none' };
+  const vv = {
+    primary: { background:T.blue, color:'#fff', borderColor:T.blue },
+    danger:  { background:T.red, color:'#fff', borderColor:T.red },
+    success: { background:T.green, color:'#fff', borderColor:T.green },
+    outline: { background:T.surface, color:T.text, borderColor:T.border },
+    ghost:   { background:'transparent', color:T.textSec, borderColor:'transparent' },
+    warning: { background:T.amber, color:'#fff', borderColor:T.amber },
+  };
+  return h('button', { onClick:disabled?undefined:onClick, title, style:{ ...base, ...vv[variant], ...style } }, children);
+}
+
+function Modal({ title, onClose, children, width=560, T }) {
+  return h('div', { style:{ position:'fixed', inset:0, zIndex:1000, background:'rgba(0,0,0,0.55)', display:'flex', alignItems:'center', justifyContent:'center', padding:16 }, onClick:e=>{ if(e.target===e.currentTarget) onClose(); } },
+    h('div', { className:'fade-in', style:{ background:T.surface, borderRadius:16, width:'100%', maxWidth:width, maxHeight:'92vh', overflow:'auto', boxShadow:`0 24px 80px ${T.shadow}`, border:`1px solid ${T.border}` } },
+      h('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', padding:'18px 24px', borderBottom:`1px solid ${T.border}`, position:'sticky', top:0, background:T.surface, zIndex:1 } },
+        h('h2', { style:{ margin:0, fontSize:16, fontWeight:700, color:T.text } }, title),
+        h(Btn, { onClick:onClose, variant:'ghost', T, style:{ padding:'4px 8px', color:T.textMuted } }, '✕')
+      ),
+      h('div', { style:{ padding:'20px 24px' } }, children)
+    )
+  );
+}
+
+function ConfirmModal({ title, message, confirmLabel='Delete', onConfirm, onClose, T }) {
+  return h(Modal, { title, onClose, width:420, T },
+    h('p', { style:{ color:T.textSec, fontSize:14, lineHeight:1.6, marginBottom:20 } }, message),
+    h('div', { style:{ display:'flex', justifyContent:'flex-end', gap:8 } },
+      h(Btn, { onClick:onClose, variant:'outline', T }, 'Cancel'),
+      h(Btn, { onClick:()=>{ onConfirm(); onClose(); }, variant:'danger', T }, confirmLabel)
+    )
+  );
+}
+
+function Field({ label, children, required, T }) {
+  return h('div', { style:{ marginBottom:16 } },
+    h('label', { style:{ display:'block', fontSize:13, fontWeight:500, color:T.textSec, marginBottom:6 } }, label, required && h('span', { style:{ color:T.red } }, ' *')),
+    children
+  );
+}
+
+function inputStyle(T) {
+  return { width:'100%', boxSizing:'border-box', border:`1px solid ${T.border}`, borderRadius:8, padding:'8px 12px', fontSize:13, fontFamily:'inherit', color:T.text, background:T.inputBg, outline:'none', transition:'border-color 0.15s' };
+}
+const Inp = (T) => props => h('input', { style:inputStyle(T), ...props });
+const Txa = (T, minH=80) => props => h('textarea', { style:{ ...inputStyle(T), resize:'vertical', minHeight:minH }, ...props });
+const Sel = (T) => ({ children, ...p }) => h('select', { style:{ ...inputStyle(T), cursor:'pointer' }, ...p }, children);
+
+function SearchBar({ value, onChange, placeholder, T }) {
+  return h('div', { style:{ position:'relative' } },
+    h('span', { style:{ position:'absolute', left:10, top:'50%', transform:'translateY(-50%)', color:T.textMuted, fontSize:14, pointerEvents:'none' } }, '🔍'),
+    h('input', { value, onChange:e=>onChange(e.target.value), placeholder, style:{ ...inputStyle(T), paddingLeft:32, fontSize:12 } })
+  );
+}
+
+// ─── Initial Data ─────────────────────────────────────────────────────────────
+function makeInitial() {
+  const p1=uid(), p2=uid(), m1=uid(), m2=uid(), m3=uid(), t1=uid(), t2=uid(), t3=uid(), t4=uid();
+  return {
+    projects:[
+      { id:p1, name:'E-Commerce Platform', key:'ECP', description:'Online shopping platform', createdAt:new Date().toISOString() },
+      { id:p2, name:'Admin Dashboard', key:'ADM', description:'Internal admin tool', createdAt:new Date().toISOString() },
+    ],
+    modules:[
+      { id:m1, projectId:p1, name:'Authentication', key:'AUTH', description:'Login, register, session' },
+      { id:m2, projectId:p1, name:'Cart & Checkout', key:'CART', description:'Shopping cart and payment' },
+      { id:m3, projectId:p2, name:'User Management', key:'USR', description:'CRUD for users' },
+    ],
+    testcases:[
+      { id:t1, moduleId:m1, projectId:p1, tcId:'ECP-AUTH-TC001', title:'Valid login with correct credentials', description:'Verify user can login with correct email and password', steps:'1. Navigate to /login\n2. Enter valid email\n3. Enter valid password\n4. Click Sign In', expectedResult:'User is redirected to dashboard. Session token is set.', priority:'high', status:'active', num:1, tags:'smoke,regression' },
+      { id:t2, moduleId:m1, projectId:p1, tcId:'ECP-AUTH-TC002', title:'Login with invalid password shows error', description:'Verify appropriate error for wrong password', steps:'1. Navigate to /login\n2. Enter valid email\n3. Enter wrong password\n4. Click Sign In', expectedResult:"Error message: 'Invalid credentials'. User stays on login page.", priority:'medium', status:'active', num:2, tags:'regression' },
+      { id:t3, moduleId:m2, projectId:p1, tcId:'ECP-CART-TC001', title:'Add item to cart', description:'Verify product can be added to shopping cart', steps:"1. Browse to product page\n2. Click 'Add to Cart'\n3. View cart", expectedResult:'Item appears in cart with correct price and quantity.', priority:'high', status:'active', num:1, tags:'smoke' },
+      { id:t4, moduleId:m3, projectId:p2, tcId:'ADM-USR-TC001', title:'Create new user account', description:'Admin can create a new user from the management panel', steps:'1. Login as admin\n2. Go to Users\n3. Click Create User\n4. Fill form\n5. Submit', expectedResult:'New user appears in list. Welcome email sent.', priority:'high', status:'active', num:1, tags:'smoke' },
+    ],
+    suites:[], runs:[],
+  };
+}
+
+function resolveSuiteTCs(suite, state) {
+  const set = new Set();
+  suite.inclusions.forEach(inc => {
+    if (inc.type==='project') state.testcases.filter(tc=>tc.projectId===inc.id).forEach(tc=>set.add(tc.id));
+    else if (inc.type==='module') state.testcases.filter(tc=>tc.moduleId===inc.id).forEach(tc=>set.add(tc.id));
+    else if (inc.type==='tc') set.add(inc.id);
+  });
+  return state.testcases.filter(tc=>set.has(tc.id));
+}
+
+// ─── Reducer ──────────────────────────────────────────────────────────────────
+function reducer(state, action) {
+  switch (action.type) {
+    case 'ADD_PROJECT':   return { ...state, projects:[...state.projects, action.project] };
+    case 'EDIT_PROJECT':  return { ...state, projects:state.projects.map(p=>p.id===action.project.id?action.project:p) };
+    case 'DELETE_PROJECT': {
+      const modIds = state.modules.filter(m=>m.projectId===action.id).map(m=>m.id);
+      return {
+        ...state,
+        projects: state.projects.filter(p=>p.id!==action.id),
+        modules: state.modules.filter(m=>m.projectId!==action.id),
+        testcases: state.testcases.filter(tc=>tc.projectId!==action.id),
+        suites: state.suites.map(s=>({ ...s, inclusions: s.inclusions.filter(i=>i.id!==action.id && !modIds.includes(i.id)) })),
+        runs: state.runs.map(r=>({ ...r, cases: r.cases.filter(c=>{ const tc=state.testcases.find(t=>t.id===c.tcId); return tc && tc.projectId!==action.id; }) })),
+      };
+    }
+    case 'ADD_MODULE':    return { ...state, modules:[...state.modules, action.module] };
+    case 'EDIT_MODULE':   return { ...state, modules:state.modules.map(m=>m.id===action.module.id?action.module:m) };
+    case 'DELETE_MODULE': return {
+      ...state,
+      modules: state.modules.filter(m=>m.id!==action.id),
+      testcases: state.testcases.filter(tc=>tc.moduleId!==action.id),
+      suites: state.suites.map(s=>({ ...s, inclusions: s.inclusions.filter(i=>i.id!==action.id) })),
+      runs: state.runs.map(r=>({ ...r, cases: r.cases.filter(c=>{ const tc=state.testcases.find(t=>t.id===c.tcId); return tc && tc.moduleId!==action.id; }) })),
+    };
+    case 'ADD_TC':    return { ...state, testcases:[...state.testcases, action.tc] };
+    case 'EDIT_TC':   return { ...state, testcases:state.testcases.map(tc=>tc.id===action.tc.id?action.tc:tc) };
+    case 'DELETE_TC': return { ...state, testcases:state.testcases.filter(tc=>tc.id!==action.id) };
+    case 'ADD_SUITE':  return { ...state, suites:[...state.suites, action.suite] };
+    case 'EDIT_SUITE': return { ...state, suites:state.suites.map(s=>s.id===action.suite.id?action.suite:s) };
+    case 'DELETE_SUITE': return { ...state, suites:state.suites.filter(s=>s.id!==action.id) };
+    case 'ADD_RUN':    return { ...state, runs:[...state.runs, action.run] };
+    case 'DELETE_RUN': return { ...state, runs:state.runs.filter(r=>r.id!==action.id) };
+    case 'UPDATE_RUN_CASE': return { ...state, runs:state.runs.map(r=>r.id===action.runId?{ ...r, cases:r.cases.map(c=>c.tcId===action.tcId?{ ...c, ...action.update }:c) }:r) };
+    case 'COMPLETE_RUN': return { ...state, runs:state.runs.map(r=>r.id===action.runId?{ ...r, status:'completed', completedAt:new Date().toISOString() }:r) };
+    case 'IMPORT': return { ...state, ...action.data };
+    default: return state;
+  }
+}
+
+// ─── Projects View ────────────────────────────────────────────────────────────
+function AddEditProjectModal({ existing, onClose, onSave, T }) {
+  const [f, sf] = useState(existing || { name:'', key:'', description:'' });
+  const ch = k => e => sf(p=>({ ...p, [k]:e.target.value }));
+  const I = Inp(T), Ta = Txa(T);
+  return h(Modal, { title: existing?'Edit Project':'New Project', onClose, width:480, T },
+    h(Field, { label:'Project Name', required:true, T }, h(I, { value:f.name, onChange:ch('name'), placeholder:'E.g. Mobile App' })),
+    h(Field, { label:'Key (short prefix)', required:true, T }, h(I, { value:f.key, onChange:ch('key'), placeholder:'E.g. APP', maxLength:6 })),
+    h(Field, { label:'Description', T }, h(Ta, { value:f.description, onChange:ch('description') })),
+    h('div', { style:{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:8 } },
+      h(Btn, { onClick:onClose, variant:'outline', T }, 'Cancel'),
+      h(Btn, { variant:'primary', T, onClick:()=>{ if(!f.name||!f.key) return; onSave({ ...(existing||{}), id:existing?.id||uid(), ...f, key:f.key.toUpperCase(), createdAt:existing?.createdAt||new Date().toISOString() }); } }, existing?'Save Changes':'Create Project')
+    )
+  );
+}
+
+function AddEditModuleModal({ project, existing, onClose, onSave, T }) {
+  const [f, sf] = useState(existing || { name:'', key:'', description:'' });
+  const ch = k => e => sf(p=>({ ...p, [k]:e.target.value }));
+  const I = Inp(T), Ta = Txa(T);
+  return h(Modal, { title: existing?`Edit Module — ${project.name}`:`New Module — ${project.name}`, onClose, width:480, T },
+    h(Field, { label:'Module Name', required:true, T }, h(I, { value:f.name, onChange:ch('name'), placeholder:'E.g. Authentication' })),
+    h(Field, { label:'Key', required:true, T }, h(I, { value:f.key, onChange:ch('key'), placeholder:'E.g. AUTH', maxLength:8 })),
+    h(Field, { label:'Description', T }, h(Ta, { value:f.description, onChange:ch('description') })),
+    h('div', { style:{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:8 } },
+      h(Btn, { onClick:onClose, variant:'outline', T }, 'Cancel'),
+      h(Btn, { variant:'primary', T, onClick:()=>{ if(!f.name||!f.key) return; onSave({ ...(existing||{}), id:existing?.id||uid(), projectId:project.id, ...f, key:f.key.toUpperCase() }); } }, existing?'Save Changes':'Create Module')
+    )
+  );
+}
+
+function AddTCModal({ module, project, existing, tcCount, onClose, onSave, T }) {
+  const nextNum = existing ? existing.num : tcCount + 1;
+  const [f, sf] = useState(existing || { title:'', description:'', steps:'', expectedResult:'', priority:'medium', tags:'' });
+  const ch = k => e => sf(p=>({ ...p, [k]:e.target.value }));
+  const tcId = existing?.tcId || genTCId(project.key, module.key, nextNum);
+  const I = Inp(T), Ta = Txa(T), S = Sel(T);
+  const TaBig = Txa(T, 160);
+  return h(Modal, { title: existing?'Edit Test Case':'New Test Case', onClose, width:680, T },
+    h('div', { style:{ background:T.blueSoft, borderRadius:8, padding:'8px 12px', marginBottom:16, fontSize:12, color:T.blueText, fontWeight:700, fontFamily:'monospace' } }, 'ID: ', tcId),
+    h(Field, { label:'Title', required:true, T }, h(I, { value:f.title, onChange:ch('title'), placeholder:'Short descriptive title' })),
+    h(Field, { label:'Description', T }, h(Ta, { value:f.description, onChange:ch('description'), placeholder:'What does this test verify?' })),
+    h(Field, { label:'Test Steps', required:true, T }, h(TaBig, { value:f.steps, onChange:ch('steps'), placeholder:'1. Navigate to...\n2. Click...\n3. Verify...' })),
+    h(Field, { label:'Expected Result', required:true, T }, h(Ta, { value:f.expectedResult, onChange:ch('expectedResult'), placeholder:'What should happen?' })),
+    h('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:12 } },
+      h(Field, { label:'Priority', T }, h(S, { value:f.priority, onChange:ch('priority') }, h('option',{value:'high'},'High'), h('option',{value:'medium'},'Medium'), h('option',{value:'low'},'Low'))),
+      h(Field, { label:'Tags (comma separated)', T }, h(I, { value:f.tags, onChange:ch('tags'), placeholder:'smoke, regression' }))
+    ),
+    h('div', { style:{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:8 } },
+      h(Btn, { onClick:onClose, variant:'outline', T }, 'Cancel'),
+      h(Btn, { variant:'primary', T, onClick:()=>{ if(!f.title) return; onSave({ ...(existing||{}), id:existing?.id||uid(), moduleId:module.id, projectId:project.id, tcId, num:nextNum, ...f, status:'active' }); } }, existing?'Save Changes':'Create Test Case')
+    )
+  );
+}
+
+function ViewTCModal({ tc, onClose, onEdit, T }) {
+  return h(Modal, { title:tc.tcId, onClose, width:620, T },
+    h('div', { style:{ display:'flex', gap:8, marginBottom:12, flexWrap:'wrap' } },
+      h(PriBadge, { p:tc.priority, T }),
+      ...(tc.tags ? tc.tags.split(',').map(t=>h('span',{key:t,style:{fontSize:11,color:T.teal,background:T.tealSoft,padding:'2px 8px',borderRadius:20}},t.trim())) : [])
+    ),
+    h('h3', { style:{ margin:'0 0 6px', fontSize:16, color:T.text } }, tc.title),
+    tc.description && h('p', { style:{ color:T.textMuted, fontSize:13, margin:'0 0 16px' } }, tc.description),
+    h('div', { style:{ background:T.surface2, borderRadius:8, padding:14, marginBottom:12 } },
+      h('div', { style:{ fontSize:11, fontWeight:700, color:T.textMuted, textTransform:'uppercase', letterSpacing:0.5, marginBottom:8 } }, 'Test Steps'),
+      h('pre', { style:{ margin:0, fontSize:13, color:T.textSec, whiteSpace:'pre-wrap', fontFamily:'inherit', lineHeight:1.7 } }, tc.steps)
+    ),
+    h('div', { style:{ background:T.greenSoft, borderRadius:8, padding:14 } },
+      h('div', { style:{ fontSize:11, fontWeight:700, color:T.greenText, textTransform:'uppercase', letterSpacing:0.5, marginBottom:8 } }, 'Expected Result'),
+      h('div', { style:{ fontSize:13, color:T.textSec } }, tc.expectedResult)
+    ),
+    h('div', { style:{ display:'flex', justifyContent:'flex-end', gap:8, marginTop:16 } },
+      h(Btn, { onClick:onClose, variant:'outline', T }, 'Close'),
+      h(Btn, { onClick:onEdit, variant:'primary', T }, 'Edit')
+    )
+  );
+}
+
+function ProjectsView({ state, dispatch, T, isMobile }) {
+  const { projects, modules, testcases } = state;
+  const [sel, setSel] = useState(null);
+  const [selMod, setSelMod] = useState(null);
+  const [projOpen, setProjOpen] = useState(true);
+  const [modOpen, setModOpen] = useState(true);
+  const [searchProj, setSearchProj] = useState('');
+  const [searchMod, setSearchMod] = useState('');
+  const [searchTC, setSearchTC] = useState('');
+  const [modal, setModal] = useState(null); // { type, data }
+  const [mobileView, setMobileView] = useState('projects'); // 'projects'|'modules'|'testcases'
+
+  const project = projects.find(p=>p.id===sel);
+  const projMods = modules.filter(m=>m.projectId===sel);
+  const module = projMods.find(m=>m.id===selMod);
+  const modTCs = testcases.filter(tc=>tc.moduleId===selMod);
+
+  const filteredProjs = projects.filter(p=>p.name.toLowerCase().includes(searchProj.toLowerCase())||p.key.toLowerCase().includes(searchProj.toLowerCase()));
+  const filteredMods = projMods.filter(m=>m.name.toLowerCase().includes(searchMod.toLowerCase()));
+  const filteredTCs = modTCs.filter(tc=>tc.title.toLowerCase().includes(searchTC.toLowerCase())||tc.tcId.toLowerCase().includes(searchTC.toLowerCase())||tc.description.toLowerCase().includes(searchTC.toLowerCase()));
+
+  const closeModal = () => setModal(null);
+
+  // Mobile: breadcrumb navigation
+  if (isMobile) {
+    return h('div', { style:{ display:'flex', flexDirection:'column', height:'100%' } },
+      // Breadcrumb bar
+      h('div', { style:{ display:'flex', alignItems:'center', gap:8, padding:'10px 14px', background:T.surface, borderBottom:`1px solid ${T.border}`, flexShrink:0 } },
+        mobileView!=='projects' && h(Btn, { onClick:()=>{ if(mobileView==='testcases') setMobileView('modules'); else setMobileView('projects'); }, variant:'ghost', T, style:{ padding:'4px 8px', fontSize:13 } }, '←'),
+        h('span', { style:{ fontSize:13, fontWeight:600, color:T.textMuted } },
+          mobileView==='projects' ? 'Projects' : mobileView==='modules' ? (project?.name||'Modules') : (module?.name||'Test Cases')
+        ),
+        h('div', { style:{ flex:1 } }),
+        mobileView==='projects' && h(Btn, { onClick:()=>setModal({type:'addProject'}), variant:'primary', T, style:{ padding:'5px 12px', fontSize:12 } }, '+ New'),
+        mobileView==='modules' && project && h(Btn, { onClick:()=>setModal({type:'addModule'}), variant:'primary', T, style:{ padding:'5px 12px', fontSize:12 } }, '+ New'),
+        mobileView==='testcases' && module && h(Btn, { onClick:()=>setModal({type:'addTC'}), variant:'primary', T, style:{ padding:'5px 12px', fontSize:12 } }, '+ New')
+      ),
+      // Search
+      h('div', { style:{ padding:'8px 12px', background:T.surface, borderBottom:`1px solid ${T.border}`, flexShrink:0 } },
+        h(SearchBar, { value: mobileView==='projects'?searchProj:mobileView==='modules'?searchMod:searchTC, onChange: mobileView==='projects'?setSearchProj:mobileView==='modules'?setSearchMod:setSearchTC, placeholder:'Search…', T })
+      ),
+      h('div', { style:{ flex:1, overflowY:'auto' } },
+        // Projects list
+        mobileView==='projects' && filteredProjs.map(p=>h('div', { key:p.id, style:{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:'14px 16px', display:'flex', alignItems:'center', gap:10 } },
+          h('div', { style:{ flex:1 }, onClick:()=>{ setSel(p.id); setSelMod(null); setMobileView('modules'); } },
+            h('div', { style:{ fontSize:14, fontWeight:600, color:T.text } }, p.name),
+            h('div', { style:{ fontSize:12, color:T.textMuted, marginTop:2 } }, p.key, ' · ', testcases.filter(tc=>tc.projectId===p.id).length, ' tests')
+          ),
+          h(Btn, { onClick:()=>setModal({type:'editProject',data:p}), variant:'ghost', T, style:{ padding:'4px 8px', fontSize:12 } }, '✎'),
+          h(Btn, { onClick:()=>setModal({type:'deleteProject',data:p}), variant:'ghost', T, style:{ padding:'4px 8px', fontSize:12, color:T.red } }, '✕')
+        )),
+        // Modules list
+        mobileView==='modules' && filteredMods.map(m=>h('div', { key:m.id, style:{ background:T.surface, borderBottom:`1px solid ${T.border}`, padding:'14px 16px', display:'flex', alignItems:'center', gap:10 } },
+          h('div', { style:{ flex:1 }, onClick:()=>{ setSelMod(m.id); setMobileView('testcases'); } },
+            h('div', { style:{ fontSize:14, fontWeight:600, color:T.text } }, m.name),
+            h('div', { style:{ fontSize:12, color:T.textMuted, marginTop:2 } }, testcases.filter(tc=>tc.moduleId===m.id).length, ' tests')
+          ),
+          h(Btn, { onClick:()=>setModal({type:'editModule',data:m}), variant:'ghost', T, style:{ padding:'4px 8px', fontSize:12 } }, '✎'),
+          h(Btn, { onClick:()=>setModal({type:'deleteModule',data:m}), variant:'ghost', T, style:{ padding:'4px 8px', fontSize:12, color:T.red } }, '✕')
+        )),
+        // Test cases list
+        mobileView==='testcases' && h('div', { style:{ padding:12 } },
+          filteredTCs.length===0 && h('div', { style:{ textAlign:'center', padding:32, color:T.textMuted } }, 'No test cases yet'),
+          filteredTCs.map(tc=>h('div', { key:tc.id, style:{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:'12px 14px', marginBottom:8 } },
+            h('div', { style:{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' } },
+              h('div', { style:{ flex:1, minWidth:0 } },
+                h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:4 } }, h('span', { style:{ fontSize:10, fontWeight:700, color:T.blue, background:T.blueSoft, padding:'2px 7px', borderRadius:5, fontFamily:'monospace' } }, tc.tcId), h(PriBadge,{p:tc.priority,T})),
+                h('div', { style:{ fontSize:13, fontWeight:500, color:T.text } }, tc.title)
+              ),
+              h('div', { style:{ display:'flex', gap:2, flexShrink:0 } },
+                h(Btn, { onClick:()=>setModal({type:'viewTC',data:tc}), variant:'ghost', T, style:{ padding:'3px 7px', fontSize:11 } }, '👁'),
+                h(Btn, { onClick:()=>setModal({type:'editTC',data:tc}), variant:'ghost', T, style:{ padding:'3px 7px', fontSize:11 } }, '✎'),
+                h(Btn, { onClick:()=>dispatch({type:'DELETE_TC',id:tc.id}), variant:'ghost', T, style:{ padding:'3px 7px', fontSize:11, color:T.red } }, '✕')
+              )
+            )
+          ))
+        )
+      ),
+      // Modals
+      renderModals({ modal, closeModal, state, dispatch, T, project, module, projMods, modTCs })
+    );
+  }
+
+  // Desktop layout
+  return h('div', { style:{ display:'flex', height:'100%', overflow:'hidden' } },
+    // Projects panel
+    h('div', { className:'panel-slide', style:{ width:projOpen?220:44, minWidth:projOpen?220:44, flexShrink:0, borderRight:`1px solid ${T.border}`, background:T.surface2, overflowY:projOpen?'auto':'hidden', display:'flex', flexDirection:'column' } },
+      h('div', { style:{ padding:'10px 12px', borderBottom:`1px solid ${T.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', background:T.surface, flexShrink:0 } },
+        projOpen && h('span', { style:{ fontSize:11, fontWeight:700, color:T.textMuted, textTransform:'uppercase', letterSpacing:0.8 } }, 'Projects'),
+        h('div', { style:{ display:'flex', gap:4 } },
+          projOpen && h(Btn, { onClick:()=>setModal({type:'addProject'}), variant:'primary', T, style:{ padding:'2px 8px', fontSize:11 } }, '+ New'),
+          h(Btn, { onClick:()=>setProjOpen(v=>!v), variant:'ghost', T, style:{ padding:'3px 6px', fontSize:12 } }, projOpen?'◀':'▶')
+        )
+      ),
+      projOpen && h('div', { style:{ padding:'8px 10px', borderBottom:`1px solid ${T.border}`, flexShrink:0 } },
+        h(SearchBar, { value:searchProj, onChange:setSearchProj, placeholder:'Search projects…', T })
+      ),
+      projOpen && filteredProjs.map(p=>h('div', { key:p.id, style:{ borderBottom:`1px solid ${T.border}`, background:sel===p.id?T.navActive:'transparent', borderLeft:sel===p.id?`3px solid ${T.blue}`:'3px solid transparent', transition:'all 0.12s' } },
+        h('div', { style:{ padding:'9px 12px', cursor:'pointer', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:4 } },
+          h('div', { style:{ flex:1, minWidth:0 }, onClick:()=>{ setSel(p.id); setSelMod(null); } },
+            h('div', { style:{ fontSize:13, fontWeight:600, color:sel===p.id?T.blue:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, p.name),
+            h('div', { style:{ fontSize:11, color:T.textMuted, marginTop:1 } }, p.key)
+          ),
+          h('div', { style:{ display:'flex', gap:1, flexShrink:0 } },
+            h(Btn, { onClick:()=>setModal({type:'editProject',data:p}), variant:'ghost', T, style:{ padding:'2px 5px', fontSize:11, color:T.textMuted } }, '✎'),
+            h(Btn, { onClick:()=>setModal({type:'deleteProject',data:p}), variant:'ghost', T, style:{ padding:'2px 5px', fontSize:11, color:T.red } }, '✕')
+          )
+        )
+      ))
+    ),
+    // Modules panel
+    h('div', { className:'panel-slide', style:{ width:modOpen?190:40, minWidth:modOpen?190:40, flexShrink:0, borderRight:`1px solid ${T.border}`, background:T.surface, overflowY:modOpen?'auto':'hidden', display:'flex', flexDirection:'column' } },
+      project ? h(Fragment, null,
+        h('div', { style:{ padding:'10px 12px', borderBottom:`1px solid ${T.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', flexShrink:0 } },
+          modOpen && h('span', { style:{ fontSize:11, fontWeight:700, color:T.textMuted, textTransform:'uppercase', letterSpacing:0.8 } }, 'Modules'),
+          h('div', { style:{ display:'flex', gap:4 } },
+            modOpen && h(Btn, { onClick:()=>setModal({type:'addModule'}), variant:'primary', T, style:{ padding:'2px 8px', fontSize:11 } }, '+ New'),
+            h(Btn, { onClick:()=>setModOpen(v=>!v), variant:'ghost', T, style:{ padding:'3px 6px', fontSize:12 } }, modOpen?'◀':'▶')
+          )
+        ),
+        modOpen && h('div', { style:{ padding:'8px 10px', borderBottom:`1px solid ${T.border}`, flexShrink:0 } },
+          h(SearchBar, { value:searchMod, onChange:setSearchMod, placeholder:'Search modules…', T })
+        ),
+        modOpen && filteredMods.length===0 && h('div', { style:{ padding:14, color:T.textMuted, fontSize:12 } }, 'No modules yet'),
+        modOpen && filteredMods.map(m=>h('div', { key:m.id, style:{ borderBottom:`1px solid ${T.border}`, background:selMod===m.id?T.navActive:'transparent', borderLeft:selMod===m.id?`3px solid ${T.blue}`:'3px solid transparent', transition:'all 0.12s' } },
+          h('div', { style:{ padding:'9px 12px', display:'flex', alignItems:'flex-start', justifyContent:'space-between', gap:4 } },
+            h('div', { style:{ flex:1, minWidth:0, cursor:'pointer' }, onClick:()=>setSelMod(m.id) },
+              h('div', { style:{ fontSize:13, fontWeight:500, color:selMod===m.id?T.blue:T.text, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, m.name),
+              h('div', { style:{ fontSize:11, color:T.textMuted, marginTop:1 } }, testcases.filter(tc=>tc.moduleId===m.id).length, ' tests')
+            ),
+            h('div', { style:{ display:'flex', gap:1, flexShrink:0 } },
+              h(Btn, { onClick:()=>setModal({type:'editModule',data:m}), variant:'ghost', T, style:{ padding:'2px 5px', fontSize:11, color:T.textMuted } }, '✎'),
+              h(Btn, { onClick:()=>setModal({type:'deleteModule',data:m}), variant:'ghost', T, style:{ padding:'2px 5px', fontSize:11, color:T.red } }, '✕')
+            )
+          )
+        ))
+      ) : h('div', { style:{ padding:14, color:T.textMuted, fontSize:12 } }, modOpen?'Select a project':'')
+    ),
+    // Test cases
+    h('div', { style:{ flex:1, overflowY:'auto', display:'flex', flexDirection:'column' } },
+      module ? h(Fragment, null,
+        h('div', { style:{ padding:'12px 18px', borderBottom:`1px solid ${T.border}`, display:'flex', justifyContent:'space-between', alignItems:'center', background:T.surface, position:'sticky', top:0, zIndex:1, flexShrink:0 } },
+          h('div', null,
+            h('div', { style:{ fontSize:15, fontWeight:700, color:T.text } }, module.name),
+            h('div', { style:{ fontSize:12, color:T.textMuted } }, module.description||project?.name)
+          ),
+          h(Btn, { onClick:()=>setModal({type:'addTC'}), variant:'primary', T }, '+ New Test Case')
+        ),
+        h('div', { style:{ padding:'10px 14px', borderBottom:`1px solid ${T.border}`, flexShrink:0 } },
+          h(SearchBar, { value:searchTC, onChange:setSearchTC, placeholder:'Search test cases…', T })
+        ),
+        h('div', { style:{ padding:14 } },
+          filteredTCs.length===0 && h('div', { style:{ textAlign:'center', padding:36, color:T.textMuted } }, h('div',{style:{fontSize:28,marginBottom:8}},'📝'), 'No test cases yet'),
+          filteredTCs.map(tc=>h('div', { key:tc.id, style:{ background:T.surface, border:`1px solid ${T.border}`, borderRadius:10, padding:'12px 14px', marginBottom:8, display:'flex', alignItems:'flex-start', gap:10 } },
+            h('div', { style:{ flex:1, minWidth:0 } },
+              h('div', { style:{ display:'flex', gap:7, flexWrap:'wrap', marginBottom:5 } },
+                h('span', { style:{ fontSize:11, fontWeight:700, color:T.blue, background:T.blueSoft, padding:'2px 8px', borderRadius:5, fontFamily:'monospace' } }, tc.tcId),
+                h(PriBadge, { p:tc.priority, T })
+              ),
+              h('div', { style:{ fontSize:14, fontWeight:500, color:T.text } }, tc.title),
+              h('div', { style:{ fontSize:12, color:T.textMuted, marginTop:2, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, tc.description)
+            ),
+            h('div', { style:{ display:'flex', gap:3, flexShrink:0 } },
+              h(Btn, { onClick:()=>setModal({type:'viewTC',data:tc}), variant:'outline', T, style:{ padding:'4px 10px', fontSize:12 } }, 'View'),
+              h(Btn, { onClick:()=>setModal({type:'editTC',data:tc}), variant:'outline', T, style:{ padding:'4px 10px', fontSize:12 } }, 'Edit'),
+              h(Btn, { onClick:()=>dispatch({type:'DELETE_TC',id:tc.id}), variant:'ghost', T, style:{ padding:'4px 8px', fontSize:12, color:T.red } }, '✕')
+            )
+          ))
+        )
+      ) : project ? h('div', { style:{ padding:40, color:T.textMuted, fontSize:14, textAlign:'center' } }, h('div',{style:{fontSize:32,marginBottom:8}},'📂'), 'Select a module to view test cases')
+        : h('div', { style:{ padding:40, color:T.textMuted, fontSize:14, textAlign:'center' } }, h('div',{style:{fontSize:32,marginBottom:8}},'📁'), 'Select a project to get started')
+    ),
+    renderModals({ modal, closeModal, state, dispatch, T, project, module, projMods, modTCs })
+  );
+
+  function renderModals({ modal, closeModal, state, dispatch, T, project, module, projMods, modTCs }) {
+    if (!modal) return null;
+    const modTCCount = modTCs?.length || 0;
+    if (modal.type==='addProject') return h(AddEditProjectModal,{onClose:closeModal,onSave:p=>{dispatch({type:'ADD_PROJECT',project:p});closeModal();},T});
+    if (modal.type==='editProject') return h(AddEditProjectModal,{existing:modal.data,onClose:closeModal,onSave:p=>{dispatch({type:'EDIT_PROJECT',project:p});closeModal();},T});
+    if (modal.type==='deleteProject') {
+      const p=modal.data, modCount=state.modules.filter(m=>m.projectId===p.id).length, tcCount=state.testcases.filter(tc=>tc.projectId===p.id).length;
+      return h(ConfirmModal,{title:'Delete Project',message:`Deleting "${p.name}" will permanently remove ${modCount} module${modCount!==1?'s':''} and ${tcCount} test case${tcCount!==1?'s':''}. This cannot be undone.`,onConfirm:()=>{dispatch({type:'DELETE_PROJECT',id:p.id});if(sel===p.id){setSel(null);setSelMod(null);}closeModal();},onClose:closeModal,T});
+    }
+    if (modal.type==='addModule'&&project) return h(AddEditModuleModal,{project,onClose:closeModal,onSave:m=>{dispatch({type:'ADD_MODULE',module:m});closeModal();},T});
+    if (modal.type==='editModule') return h(AddEditModuleModal,{project,existing:modal.data,onClose:closeModal,onSave:m=>{dispatch({type:'EDIT_MODULE',module:m});closeModal();},T});
+    if (modal.type==='deleteModule') {
+      const m=modal.data, tcCount=state.testcases.filter(tc=>tc.moduleId===m.id).length;
+      return h(ConfirmModal,{title:'Delete Module',message:`Deleting "${m.name}" will permanently remove ${tcCount} test case${tcCount!==1?'s':''}. This cannot be undone.`,onConfirm:()=>{dispatch({type:'DELETE_MODULE',id:m.id});if(selMod===m.id)setSelMod(null);closeModal();},onClose:closeModal,T});
+    }
+    if (modal.type==='addTC'&&module) return h(AddTCModal,{module,project,tcCount:modTCCount,onClose:closeModal,onSave:tc=>{dispatch({type:'ADD_TC',tc});closeModal();},T});
+    if (modal.type==='editTC') return h(AddTCModal,{module,project,existing:modal.data,tcCount:modTCCount,onClose:closeModal,onSave:tc=>{dispatch({type:'EDIT_TC',tc});closeModal();},T});
+    if (modal.type==='viewTC') return h(ViewTCModal,{tc:modal.data,onClose:closeModal,onEdit:()=>setModal({type:'editTC',data:modal.data}),T});
+    return null;
+  }
+}
+
+// ─── Suites View ──────────────────────────────────────────────────────────────
+function AddSuiteModal({ existing, state, onClose, onSave, T }) {
+  const { projects, modules, testcases } = state;
+  const [f, sf] = useState({ name:existing?.name||'', description:existing?.description||'' });
+  const [inclusions, setInc] = useState(existing?.inclusions||[]);
+  const [addType, setAddType] = useState('project');
+  const [addId, setAddId] = useState('');
+  const I = Inp(T), Ta = Txa(T), S = Sel(T);
+  const getLabel=(type,id)=>{
+    if(type==='project') return projects.find(p=>p.id===id)?.name||id;
+    if(type==='module') return modules.find(m=>m.id===id)?.name||id;
+    return testcases.find(tc=>tc.id===id)?.tcId||id;
+  };
+  const opts = { project:projects, module:modules, tc:testcases };
+  const addInc = () => {
+    if(!addId) return;
+    if(inclusions.find(i=>i.type===addType&&i.id===addId)) return;
+    setInc(p=>[...p,{type:addType,id:addId,label:getLabel(addType,addId)}]);
+    setAddId('');
+  };
+  return h(Modal,{title:existing?'Edit Suite':'New Test Suite',onClose,width:580,T},
+    h(Field,{label:'Suite Name',required:true,T},h(I,{value:f.name,onChange:e=>sf(p=>({...p,name:e.target.value})),placeholder:'E.g. Smoke Tests'})),
+    h(Field,{label:'Description',T},h(Ta,{value:f.description,onChange:e=>sf(p=>({...p,description:e.target.value}))})),
+    h('div',{style:{fontSize:13,fontWeight:600,color:T.textSec,marginBottom:10}},'Add Test Cases'),
+    h('div',{style:{display:'flex',gap:8,marginBottom:12}},
+      h(S,{value:addType,onChange:e=>{setAddType(e.target.value);setAddId('');},style:{width:120}},h('option',{value:'project'},'Project'),h('option',{value:'module'},'Module'),h('option',{value:'tc'},'Test Case')),
+      h(S,{value:addId,onChange:e=>setAddId(e.target.value),style:{flex:1}},
+        h('option',{value:''},'Select…'),
+        opts[addType].map(item=>h('option',{key:item.id,value:item.id},item.name||item.title||item.tcId))
+      ),
+      h(Btn,{variant:'primary',onClick:addInc,T,style:{padding:'6px 14px'}},'Add')
+    ),
+    inclusions.length>0&&h('div',{style:{background:T.surface2,borderRadius:8,padding:10,marginBottom:16}},
+      inclusions.map((inc,i)=>h('div',{key:i,style:{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'5px 0',borderBottom:i<inclusions.length-1?`1px solid ${T.border}`:'none'}},
+        h('span',{style:{fontSize:12,color:T.textSec}},h('span',{style:{color:T.textMuted}},inc.type,': '),inc.label),
+        h(Btn,{variant:'ghost',T,style:{padding:'2px 6px',fontSize:11,color:T.red},onClick:()=>setInc(p=>p.filter((_,j)=>j!==i))},'✕')
+      ))
+    ),
+    h('div',{style:{display:'flex',justifyContent:'flex-end',gap:8}},
+      h(Btn,{onClick:onClose,variant:'outline',T},'Cancel'),
+      h(Btn,{variant:'primary',T,onClick:()=>{if(!f.name)return;onSave({id:existing?.id||uid(),...f,inclusions,createdAt:existing?.createdAt||new Date().toISOString()});}},existing?'Save Changes':'Create Suite')
+    )
+  );
+}
+
+function SuitesView({ state, dispatch, T }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [editSuite, setEditSuite] = useState(null);
+  const [search, setSearch] = useState('');
+  const [confirm, setConfirm] = useState(null);
+  const filtered = state.suites.filter(s=>s.name.toLowerCase().includes(search.toLowerCase()));
+  return h('div',{style:{padding:20,maxWidth:900,margin:'0 auto',overflowY:'auto',height:'100%'}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+      h('div',null,
+        h('h2',{style:{margin:0,fontSize:18,fontWeight:700,color:T.text}},'Test Suites'),
+        h('p',{style:{margin:'3px 0 0',color:T.textMuted,fontSize:13}},'Group test cases into reusable suites')
+      ),
+      h(Btn,{variant:'primary',T,onClick:()=>setShowAdd(true)},'+ New Suite')
+    ),
+    h('div',{style:{marginBottom:14}},h(SearchBar,{value:search,onChange:setSearch,placeholder:'Search suites…',T})),
+    state.suites.length===0&&h('div',{style:{textAlign:'center',padding:'50px 40px',background:T.surface,borderRadius:14,border:`1px dashed ${T.border}`}},
+      h('div',{style:{fontSize:36,marginBottom:10}},'📋'),
+      h('div',{style:{fontSize:14,fontWeight:500,color:T.textSec,marginBottom:4}},'No test suites yet'),
+      h('div',{style:{fontSize:13,color:T.textMuted}},'Create a suite to group test cases for a test run')
+    ),
+    h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+      filtered.map(suite=>h('div',{key:suite.id,style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:'14px 18px',display:'flex',alignItems:'center',gap:14}},
+        h('div',{style:{flex:1}},
+          h('div',{style:{fontSize:14,fontWeight:600,color:T.text,marginBottom:3}},suite.name),
+          suite.description&&h('div',{style:{fontSize:12,color:T.textMuted,marginBottom:6}},suite.description),
+          h('div',{style:{display:'flex',gap:6,flexWrap:'wrap'}},
+            h('span',{style:{fontSize:11,color:T.blue,background:T.blueSoft,padding:'2px 8px',borderRadius:20}},resolveSuiteTCs(suite,state).length,' test cases'),
+            suite.inclusions.map((inc,i)=>h('span',{key:i,style:{fontSize:11,color:T.textMuted,background:T.gray100,padding:'2px 8px',borderRadius:20}},inc.type,': ',inc.label))
+          )
+        ),
+        h('div',{style:{display:'flex',gap:4}},
+          h(Btn,{variant:'outline',T,style:{fontSize:12,padding:'5px 11px'},onClick:()=>setEditSuite(suite)},'Edit'),
+          h(Btn,{variant:'ghost',T,style:{fontSize:12,color:T.red},onClick:()=>setConfirm(suite)},'✕')
+        )
+      ))
+    ),
+    (showAdd||editSuite)&&h(AddSuiteModal,{existing:editSuite,state,onClose:()=>{setShowAdd(false);setEditSuite(null);},onSave:s=>{dispatch({type:editSuite?'EDIT_SUITE':'ADD_SUITE',suite:s});setShowAdd(false);setEditSuite(null);},T}),
+    confirm&&h(ConfirmModal,{title:'Delete Suite',message:`Delete "${confirm.name}"? This won't affect the test cases themselves.`,onConfirm:()=>{dispatch({type:'DELETE_SUITE',id:confirm.id});setConfirm(null);},onClose:()=>setConfirm(null),T})
+  );
+}
+
+// ─── Runs View ────────────────────────────────────────────────────────────────
+function AddRunModal({ state, onClose, onSave, T }) {
+  const { suites } = state;
+  const [name, setName] = useState('');
+  const [desc, setDesc] = useState('');
+  const [selSuites, setSelSuites] = useState([]);
+  const toggle = id => setSelSuites(p=>p.includes(id)?p.filter(x=>x!==id):[...p,id]);
+  const I = Inp(T), Ta = Txa(T);
+  const tcCount = useMemo(()=>{
+    const set=new Set();
+    selSuites.forEach(sid=>{const suite=suites.find(s=>s.id===sid);if(suite)resolveSuiteTCs(suite,state).forEach(tc=>set.add(tc.id));});
+    return set.size;
+  },[selSuites,state,suites]);
+  return h(Modal,{title:'New Test Run',onClose,width:520,T},
+    h(Field,{label:'Run Name',required:true,T},h(I,{value:name,onChange:e=>setName(e.target.value),placeholder:'E.g. Sprint 12 Regression'})),
+    h(Field,{label:'Description',T},h(Ta,{value:desc,onChange:e=>setDesc(e.target.value)})),
+    h(Field,{label:'Select Suites',required:true,T},
+      h('div',{style:{border:`1px solid ${T.border}`,borderRadius:8,overflow:'hidden'}},
+        suites.length===0&&h('div',{style:{padding:'12px 14px',fontSize:13,color:T.textMuted}},'No suites available'),
+        suites.map(s=>{const checked=selSuites.includes(s.id);return h('label',{key:s.id,style:{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',cursor:'pointer',background:checked?T.navActive:T.surface,borderBottom:`1px solid ${T.border}`}},
+          h('input',{type:'checkbox',checked,onChange:()=>toggle(s.id)}),
+          h('div',null,h('div',{style:{fontSize:13,fontWeight:500,color:T.text}},s.name),h('div',{style:{fontSize:11,color:T.textMuted}},resolveSuiteTCs(s,state).length,' test cases'))
+        );})
+      )
+    ),
+    tcCount>0&&h('div',{style:{fontSize:13,color:T.blue,marginBottom:12}},'→ ',tcCount,' unique test cases will be included'),
+    h('div',{style:{display:'flex',justifyContent:'flex-end',gap:8}},
+      h(Btn,{onClick:onClose,variant:'outline',T},'Cancel'),
+      h(Btn,{variant:'primary',T,onClick:()=>{
+        if(!name||selSuites.length===0)return;
+        const tcSet=new Set();
+        selSuites.forEach(sid=>{const suite=suites.find(s=>s.id===sid);if(suite)resolveSuiteTCs(suite,state).forEach(tc=>tcSet.add(tc.id));});
+        const cases=[...tcSet].map(id=>({tcId:id,status:'pending',comment:'',executedAt:null}));
+        onSave({id:uid(),name,description:desc,suiteIds:selSuites,cases,status:'active',createdAt:new Date().toISOString(),completedAt:null});
+      }},'Start Run')
+    )
+  );
+}
+
+function CaseExecutor({ runCase, tc, state, onUpdate, disabled, T }) {
+  if(!tc) return null;
+  const mod = state.modules.find(m=>m.id===tc.moduleId);
+  const proj = state.projects.find(p=>p.id===tc.projectId);
+  return h('div',{style:{padding:22}},
+    h('div',{style:{marginBottom:14}},
+      h('div',{style:{fontSize:11,color:T.textMuted,marginBottom:4}},proj?.name,' › ',mod?.name),
+      h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4}},
+        h('span',{style:{fontFamily:'monospace',fontSize:12,color:T.blue,background:T.blueSoft,padding:'2px 8px',borderRadius:5}},tc.tcId),
+        h(PriBadge,{p:tc.priority,T})
+      ),
+      h('h3',{style:{margin:'8px 0 4px',fontSize:16,fontWeight:700,color:T.text}},tc.title),
+      tc.description&&h('p',{style:{margin:'0 0 14px',color:T.textMuted,fontSize:13}},tc.description)
+    ),
+    h('div',{style:{background:T.surface2,borderRadius:8,padding:14,marginBottom:12}},
+      h('div',{style:{fontSize:11,fontWeight:700,color:T.textMuted,textTransform:'uppercase',letterSpacing:0.5,marginBottom:8}},'Test Steps'),
+      h('pre',{style:{margin:0,fontSize:13,color:T.textSec,whiteSpace:'pre-wrap',fontFamily:'inherit',lineHeight:1.7}},tc.steps)
+    ),
+    h('div',{style:{background:T.greenSoft,borderRadius:8,padding:14,marginBottom:18}},
+      h('div',{style:{fontSize:11,fontWeight:700,color:T.greenText,textTransform:'uppercase',letterSpacing:0.5,marginBottom:8}},'Expected Result'),
+      h('div',{style:{fontSize:13,color:T.textSec}},tc.expectedResult)
+    ),
+    !disabled&&h(Fragment,null,
+      h('div',{style:{fontSize:13,fontWeight:600,color:T.textSec,marginBottom:10}},'Update Result'),
+      h('div',{style:{display:'flex',flexWrap:'wrap',gap:7,marginBottom:14}},
+        Object.entries(STATUS_META).filter(([k])=>k!=='in-progress').map(([k,m])=>{
+          const active=runCase.status===k;
+          const color=T[m.colorKey]||T.textMuted, bg=T[m.colorKey+'Soft']||T.gray100;
+          return h(Btn,{key:k,onClick:()=>onUpdate({status:k,executedAt:new Date().toISOString()}),variant:'outline',T,style:{background:active?bg:T.surface,borderColor:active?color:T.border,color:active?color:T.textSec,fontWeight:active?700:500,padding:'7px 14px'}},m.icon,' ',m.label);
+        })
+      ),
+      h(Field,{label:'Comment / Notes',T},
+        h('textarea',{value:runCase.comment,onChange:e=>onUpdate({comment:e.target.value}),placeholder:'Optional: describe what you observed…',style:{...inputStyle(T),resize:'vertical',minHeight:70}})
+      )
+    ),
+    disabled&&h('div',{style:{background:T.surface2,borderRadius:8,padding:14}},
+      h('div',{style:{fontSize:12,color:T.textMuted,marginBottom:6}},'Result'),
+      h(StatusBadge,{status:runCase.status,T}),
+      runCase.comment&&h('div',{style:{fontSize:13,color:T.textSec,marginTop:8}},runCase.comment)
+    )
+  );
+}
+
+function RunExecutionView({ run, state, dispatch, onBack, T, isMobile }) {
+  const [filter, setFilter] = useState('all');
+  const [sel, setSel] = useState(null);
+  const [showList, setShowList] = useState(true);
+  const getTC = id => state.testcases.find(t=>t.id===id);
+  const cases = run.cases;
+  const filtered = filter==='all'?cases:cases.filter(c=>c.status===filter);
+  const stats = useMemo(()=>{
+    const total=cases.length, counts={};
+    Object.keys(STATUS_META).forEach(k=>{counts[k]=cases.filter(c=>c.status===k).length;});
+    return{total,...counts,done:total-counts.pending};
+  },[cases]);
+  const updateCase=(tcId,update)=>dispatch({type:'UPDATE_RUN_CASE',runId:run.id,tcId,update});
+  const completeRun=()=>dispatch({type:'COMPLETE_RUN',runId:run.id});
+  const allDone=stats.pending===0;
+  const pct=stats.total?Math.round((stats.pass/stats.total)*100):0;
+  const S = Sel(T);
+
+  const header = h('div',{style:{padding:isMobile?'10px 14px':'12px 18px',borderBottom:`1px solid ${T.border}`,background:T.surface,display:'flex',alignItems:'center',gap:10,flexShrink:0,flexWrap:'wrap'}},
+    h(Btn,{variant:'ghost',onClick:onBack,T,style:{padding:'4px 8px'}},'← Back'),
+    h('div',{style:{flex:1,minWidth:0}},
+      h('div',{style:{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}},
+        h('span',{style:{fontSize:14,fontWeight:700,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:180}},run.name),
+        h(RunStatusBadge,{status:run.status,T})
+      )
+    ),
+    h('div',{style:{display:'flex',gap:12,fontSize:12,flexWrap:'wrap'}},
+      h('span',{style:{color:T.green}},'✓ ',stats.pass),
+      h('span',{style:{color:T.red}},'✗ ',stats.fail),
+      h('span',{style:{color:T.textMuted}},'⋯ ',stats.pending),
+      h('span',{style:{fontWeight:700,color:T.blue}},pct,'%')
+    ),
+    run.status!=='completed'&&allDone&&h(Btn,{variant:'success',onClick:completeRun,T},'✓ Complete'),
+    run.status!=='completed'&&!allDone&&h('span',{style:{fontSize:11,color:T.textMuted}},stats.done,'/',stats.total)
+  );
+
+  const progress = h('div',{style:{height:4,background:T.surface2,flexShrink:0}},
+    h('div',{style:{height:'100%',background:T.green,width:pct+'%',transition:'width 0.35s'}})
+  );
+
+  if (isMobile) {
+    return h('div',{style:{display:'flex',flexDirection:'column',height:'100%'}},
+      header, progress,
+      // Toggle list/detail
+      sel&&h('div',{style:{display:'flex',background:T.surface,borderBottom:`1px solid ${T.border}`,flexShrink:0}},
+        h('button',{onClick:()=>setSel(null),style:{flex:1,padding:'8px',border:'none',background:showList?T.navActive:T.surface,color:showList?T.blue:T.textMuted,fontFamily:'inherit',fontSize:12,fontWeight:600,cursor:'pointer'}},'Case List'),
+        h('button',{onClick:()=>setShowList(false),style:{flex:1,padding:'8px',border:'none',background:!showList?T.navActive:T.surface,color:!showList?T.blue:T.textMuted,fontFamily:'inherit',fontSize:12,fontWeight:600,cursor:'pointer'}},'Details')
+      ),
+      h('div',{style:{flex:1,overflow:'hidden',display:'flex',flexDirection:'column'}},
+        (!sel||showList)&&h('div',{style:{flex:1,overflowY:'auto'}},
+          h('div',{style:{padding:'8px 10px',borderBottom:`1px solid ${T.border}`}},h(S,{value:filter,onChange:e=>setFilter(e.target.value),style:{fontSize:12}},h('option',{value:'all'},'All (',stats.total,')'),h('option',{value:'pending'},'Pending (',stats.pending,')'),h('option',{value:'pass'},'Pass (',stats.pass,')'),h('option',{value:'fail'},'Fail (',stats.fail,')'))),
+          filtered.map(c=>{const tc=getTC(c.tcId);if(!tc)return null;return h('div',{key:c.tcId,onClick:()=>{setSel(c.tcId);setShowList(false);},style:{padding:'11px 13px',cursor:'pointer',borderBottom:`1px solid ${T.border}`,background:sel===c.tcId?T.navActive:T.surface}},
+            h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6}},
+              h('div',{style:{flex:1,minWidth:0}},
+                h('div',{style:{fontSize:10,color:T.textMuted,fontFamily:'monospace',marginBottom:2}},tc.tcId),
+                h('div',{style:{fontSize:12,fontWeight:500,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},tc.title)
+              ),
+              h(StatusBadge,{status:c.status,T,small:true})
+            )
+          );})
+        ),
+        sel&&!showList&&h('div',{style:{flex:1,overflowY:'auto'}},
+          h(CaseExecutor,{runCase:cases.find(c=>c.tcId===sel),tc:getTC(sel),state,disabled:run.status==='completed',onUpdate:u=>updateCase(sel,u),T})
+        )
+      )
+    );
+  }
+
+  return h('div',{style:{display:'flex',flexDirection:'column',height:'100%'}},
+    header, progress,
+    h('div',{style:{display:'flex',flex:1,overflow:'hidden'}},
+      h('div',{style:{width:300,flexShrink:0,borderRight:`1px solid ${T.border}`,overflowY:'auto',display:'flex',flexDirection:'column'}},
+        h('div',{style:{padding:'8px 10px',borderBottom:`1px solid ${T.border}`,flexShrink:0}},h(S,{value:filter,onChange:e=>setFilter(e.target.value),style:{fontSize:12}},h('option',{value:'all'},'All (',stats.total,')'),h('option',{value:'pending'},'Pending (',stats.pending,')'),h('option',{value:'pass'},'Pass (',stats.pass,')'),h('option',{value:'fail'},'Fail (',stats.fail,')'),h('option',{value:'blocked'},'Blocked (',stats.blocked,')'),h('option',{value:'skipped'},'Skipped (',stats.skipped,')'))),
+        filtered.map(c=>{const tc=getTC(c.tcId);if(!tc)return null;const mod=state.modules.find(m=>m.id===tc.moduleId);return h('div',{key:c.tcId,onClick:()=>setSel(c.tcId),style:{padding:'10px 13px',cursor:'pointer',borderBottom:`1px solid ${T.border}`,background:sel===c.tcId?T.navActive:T.surface,borderLeft:sel===c.tcId?`3px solid ${T.blue}`:'3px solid transparent'}},
+          h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:6}},
+            h('div',{style:{flex:1,minWidth:0}},
+              h('div',{style:{fontSize:10,color:T.textMuted,fontFamily:'monospace',marginBottom:2}},tc.tcId),
+              h('div',{style:{fontSize:12,fontWeight:500,color:T.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},tc.title),
+              h('div',{style:{fontSize:11,color:T.textMuted,marginTop:2}},mod?.name)
+            ),
+            h(StatusBadge,{status:c.status,T,small:true})
+          )
+        );})
+      ),
+      h('div',{style:{flex:1,overflowY:'auto'}},
+        sel?h(CaseExecutor,{runCase:cases.find(c=>c.tcId===sel),tc:getTC(sel),state,disabled:run.status==='completed',onUpdate:u=>updateCase(sel,u),T}):
+        h('div',{style:{display:'flex',alignItems:'center',justifyContent:'center',height:'100%',color:T.textMuted,fontSize:14}},'Select a test case to execute')
+      )
+    )
+  );
+}
+
+function RunsView({ state, dispatch, T, isMobile }) {
+  const { runs, suites } = state;
+  const [showAdd, setShowAdd] = useState(false);
+  const [activeRun, setActiveRun] = useState(null);
+  const [search, setSearch] = useState('');
+  const [confirm, setConfirm] = useState(null);
+  const run = runs.find(r=>r.id===activeRun);
+  if (run) return h(RunExecutionView,{run,state,dispatch,onBack:()=>setActiveRun(null),T,isMobile});
+  const filtered = runs.filter(r=>r.name.toLowerCase().includes(search.toLowerCase()));
+  return h('div',{style:{padding:20,maxWidth:900,margin:'0 auto',overflowY:'auto',height:'100%'}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}},
+      h('div',null,h('h2',{style:{margin:0,fontSize:18,fontWeight:700,color:T.text}},'Test Runs'),h('p',{style:{margin:'3px 0 0',color:T.textMuted,fontSize:13}},'Execute and track test results')),
+      h(Btn,{variant:'primary',T,onClick:()=>setShowAdd(true),disabled:suites.length===0},'+ New Run')
+    ),
+    h('div',{style:{marginBottom:14}},h(SearchBar,{value:search,onChange:setSearch,placeholder:'Search runs…',T})),
+    suites.length===0&&h('div',{style:{background:T.amberSoft,borderRadius:10,padding:'10px 14px',marginBottom:16,fontSize:13,color:T.amber}},'⚠ Create at least one test suite before starting a run.'),
+    runs.length===0&&h('div',{style:{textAlign:'center',padding:'50px 40px',background:T.surface,borderRadius:14,border:`1px dashed ${T.border}`}},h('div',{style:{fontSize:36,marginBottom:10}},'▶'),h('div',{style:{fontSize:14,fontWeight:500,color:T.textSec}},'No test runs yet')),
+    h('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+      filtered.map(r=>{
+        const total=r.cases.length,passed=r.cases.filter(c=>c.status==='pass').length,failed=r.cases.filter(c=>c.status==='fail').length,pending=r.cases.filter(c=>c.status==='pending').length,pct=total?Math.round((passed/total)*100):0;
+        return h('div',{key:r.id,style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:12,padding:'14px 18px',display:'flex',alignItems:'center',gap:14,flexWrap:'wrap'}},
+          h('div',{style:{flex:1,minWidth:200}},
+            h('div',{style:{display:'flex',alignItems:'center',gap:8,marginBottom:4,flexWrap:'wrap'}},h('span',{style:{fontSize:14,fontWeight:600,color:T.text}},r.name),h(RunStatusBadge,{status:r.status,T})),
+            h('div',{style:{fontSize:12,color:T.textMuted,marginBottom:6}},r.suiteIds.length,' suite'+(r.suiteIds.length>1?'s':''),' · ',total,' test cases'),
+            h('div',{style:{display:'flex',gap:12,fontSize:12,flexWrap:'wrap'}},h('span',{style:{color:T.green}},'✓ ',passed,' passed'),h('span',{style:{color:T.red}},'✗ ',failed,' failed'),h('span',{style:{color:T.textMuted}},'⋯ ',pending,' pending'),h('span',{style:{fontWeight:700,color:T.blue}},pct,'%'))
+          ),
+          h('div',{style:{display:'flex',gap:5}},
+            r.status!=='completed'&&h(Btn,{variant:'primary',T,style:{fontSize:12},onClick:()=>setActiveRun(r.id)},'Execute'),
+            r.status==='completed'&&h(Btn,{variant:'outline',T,style:{fontSize:12},onClick:()=>setActiveRun(r.id)},'View'),
+            h(Btn,{variant:'ghost',T,style:{fontSize:12,color:T.red},onClick:()=>setConfirm(r)},'✕')
+          )
+        );
+      })
+    ),
+    showAdd&&h(AddRunModal,{state,onClose:()=>setShowAdd(false),onSave:r=>{dispatch({type:'ADD_RUN',run:r});setShowAdd(false);setActiveRun(r.id);},T}),
+    confirm&&h(ConfirmModal,{title:'Delete Run',message:`Delete test run "${confirm.name}"? All execution data will be lost.`,onConfirm:()=>{dispatch({type:'DELETE_RUN',id:confirm.id});setConfirm(null);},onClose:()=>setConfirm(null),T})
+  );
+}
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+function DonutChart({ passed, failed, other, total, T }) {
+  if (!total) return null;
+  const cx=80,cy=80,r=60,sw=20;
+  let cum=-90;
+  const segs=[{v:passed,color:T.green},{v:failed,color:T.red},{v:other,color:T.border}].filter(s=>s.v>0);
+  const arcs=segs.map(s=>{const a=(s.v/total)*360,start=cum;cum+=a;return{...s,start,angle:a};});
+  const pxy=(a,rr)=>{const rad=a*Math.PI/180;return{x:cx+rr*Math.cos(rad),y:cy+rr*Math.sin(rad)};};
+  const pct=Math.round((passed/total)*100);
+  return h('svg',{width:160,height:160,viewBox:'0 0 160 160',style:{display:'block',margin:'0 auto'}},
+    arcs.map((arc,i)=>{
+      if(!arc.angle)return null;
+      const s=pxy(arc.start,r),e=pxy(arc.start+arc.angle,r),large=arc.angle>180?1:0;
+      return h('path',{key:i,d:`M ${s.x} ${s.y} A ${r} ${r} 0 ${large} 1 ${e.x} ${e.y}`,fill:'none',stroke:arc.color,strokeWidth:sw});
+    }),
+    h('text',{x:cx,y:cy-5,textAnchor:'middle',fontSize:22,fontWeight:800,fill:T.text},pct+'%'),
+    h('text',{x:cx,y:cy+14,textAnchor:'middle',fontSize:10,fill:T.textMuted},'pass rate')
+  );
+}
+
+function ReportContent({ run, state, T }) {
+  const cases=run.cases,total=cases.length;
+  const byStatus={};
+  Object.keys(STATUS_META).forEach(k=>{byStatus[k]=cases.filter(c=>c.status===k).length;});
+  const passed=byStatus.pass||0,failed=byStatus.fail||0;
+  const passRate=total?Math.round((passed/total)*100):0;
+  const byModule={};
+  cases.forEach(c=>{const tc=state.testcases.find(t=>t.id===c.tcId);if(!tc)return;const mod=state.modules.find(m=>m.id===tc.moduleId);const key=mod?.name||'Unknown';if(!byModule[key])byModule[key]={pass:0,fail:0,total:0};byModule[key].total++;if(c.status==='pass')byModule[key].pass++;else if(c.status==='fail')byModule[key].fail++;});
+  const byPriority={};
+  ['high','medium','low'].forEach(p=>{const rel=cases.filter(c=>state.testcases.find(t=>t.id===c.tcId)?.priority===p);byPriority[p]={total:rel.length,pass:rel.filter(c=>c.status==='pass').length,fail:rel.filter(c=>c.status==='fail').length};});
+  const rc=passRate>=80?T.green:passRate>=60?T.amber:T.red;
+  return h('div',null,
+    h('div',{style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:20,marginBottom:14}},
+      h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}},
+        h('div',null,h('h3',{style:{margin:'0 0 4px',fontSize:17,fontWeight:700,color:T.text}},run.name),h('div',{style:{fontSize:12,color:T.textMuted}},'Completed ',run.completedAt?new Date(run.completedAt).toLocaleString():'—')),
+        h('div',{style:{textAlign:'right'}},h('div',{style:{fontSize:38,fontWeight:800,color:rc}},passRate,'%'),h('div',{style:{fontSize:11,color:T.textMuted}},'Pass Rate'))
+      ),
+      h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(80px,1fr))',gap:8,marginTop:16}},
+        [{label:'Total',val:total,color:T.text},{label:'Passed',val:byStatus.pass||0,color:T.green},{label:'Failed',val:byStatus.fail||0,color:T.red},{label:'Blocked',val:byStatus.blocked||0,color:T.amber},{label:'Skipped',val:byStatus.skipped||0,color:T.purple},{label:'Pending',val:byStatus.pending||0,color:T.textMuted}]
+        .map(m=>h('div',{key:m.label,style:{background:T.surface2,borderRadius:10,padding:'10px 12px',textAlign:'center'}},h('div',{style:{fontSize:20,fontWeight:800,color:m.color}},m.val),h('div',{style:{fontSize:11,color:T.textMuted,marginTop:2}},m.label)))
+      ),
+      h('div',{style:{marginTop:14}},
+        h('div',{style:{height:8,background:T.surface2,borderRadius:8,overflow:'hidden',display:'flex'}},
+          passed>0&&h('div',{style:{width:`${(passed/total)*100}%`,background:T.green}}),
+          failed>0&&h('div',{style:{width:`${(failed/total)*100}%`,background:T.red}}),
+          (byStatus.blocked||0)>0&&h('div',{style:{width:`${((byStatus.blocked||0)/total)*100}%`,background:T.amber}}),
+          (byStatus.skipped||0)>0&&h('div',{style:{width:`${((byStatus.skipped||0)/total)*100}%`,background:T.purple}})
+        )
+      )
+    ),
+    h('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(280px,1fr))',gap:14,marginBottom:14}},
+      h('div',{style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:18}},
+        h('h4',{style:{margin:'0 0 14px',fontSize:14,fontWeight:600,color:T.textSec}},'Results by Module'),
+        Object.keys(byModule).length===0&&h('div',{style:{color:T.textMuted,fontSize:13}},'No data'),
+        Object.entries(byModule).map(([name,data])=>{const p=data.total?Math.round((data.pass/data.total)*100):0,c=p>=80?T.green:p>=60?T.amber:T.red;return h('div',{key:name,style:{marginBottom:12}},h('div',{style:{display:'flex',justifyContent:'space-between',fontSize:12,color:T.textSec,marginBottom:4}},h('span',null,name),h('span',{style:{fontWeight:600,color:c}},p,'%')),h('div',{style:{height:6,background:T.surface2,borderRadius:4,overflow:'hidden'}},h('div',{style:{width:p+'%',background:c,height:'100%',borderRadius:4,transition:'width 0.4s'}})),h('div',{style:{fontSize:11,color:T.textMuted,marginTop:2}},'✓',data.pass,' ✗',data.fail,' of ',data.total));})
+      ),
+      h('div',{style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:18}},
+        h('h4',{style:{margin:'0 0 14px',fontSize:14,fontWeight:600,color:T.textSec}},'Results by Priority'),
+        [['high','High',T.red],['medium','Medium',T.amber],['low','Low',T.green]].map(([key,label,color])=>{const data=byPriority[key],p=data.total?Math.round((data.pass/data.total)*100):0;return h('div',{key,style:{marginBottom:12}},h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}},h('div',{style:{display:'flex',alignItems:'center',gap:6}},h('span',{style:{width:8,height:8,borderRadius:2,background:color,display:'inline-block'}}),h('span',{style:{fontSize:12,color:T.textSec}},label)),h('span',{style:{fontSize:12,color:T.textMuted}},data.total,' tests')),h('div',{style:{height:18,background:T.surface2,borderRadius:4,overflow:'hidden',display:'flex'}},data.pass>0&&h('div',{style:{width:`${(data.pass/data.total)*100}%`,background:T.green,display:'flex',alignItems:'center',justifyContent:'center'}},h('span',{style:{fontSize:9,color:'white',fontWeight:700}},data.pass)),data.fail>0&&h('div',{style:{width:`${(data.fail/data.total)*100}%`,background:T.red,display:'flex',alignItems:'center',justifyContent:'center'}},h('span',{style:{fontSize:9,color:'white',fontWeight:700}},data.fail))));})  ,
+        h('div',{style:{marginTop:16,textAlign:'center'}},h(DonutChart,{passed,failed,other:total-passed-failed,total,T}))
+      )
+    ),
+    failed>0&&h('div',{style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:18,marginBottom:14}},
+      h('h4',{style:{margin:'0 0 12px',fontSize:14,fontWeight:600,color:T.red}},'Failed Test Cases (',failed,')'),
+      cases.filter(c=>c.status==='fail').map(c=>{const tc=state.testcases.find(t=>t.id===c.tcId);if(!tc)return null;const mod=state.modules.find(m=>m.id===tc.moduleId);return h('div',{key:c.tcId,style:{borderLeft:`3px solid ${T.red}`,paddingLeft:12,marginBottom:12,paddingBottom:12,borderBottom:`1px solid ${T.border}`}},
+        h('div',{style:{display:'flex',gap:8,alignItems:'center',marginBottom:4,flexWrap:'wrap'}},h('span',{style:{fontSize:11,fontFamily:'monospace',color:T.blue,background:T.blueSoft,padding:'1px 7px',borderRadius:4}},tc.tcId),h(PriBadge,{p:tc.priority,T}),h('span',{style:{fontSize:11,color:T.textMuted}},mod?.name)),
+        h('div',{style:{fontSize:13,fontWeight:500,color:T.text}},tc.title),
+        c.comment&&h('div',{style:{fontSize:12,color:T.textMuted,marginTop:4,fontStyle:'italic'}},'"',c.comment,'"')
+      );})
+    ),
+    h('div',{style:{background:T.surface,border:`1px solid ${T.border}`,borderRadius:14,padding:18}},
+      h('h4',{style:{margin:'0 0 12px',fontSize:14,fontWeight:600,color:T.textSec}},'All Test Cases'),
+      h('div',{style:{overflowX:'auto'}},
+        h('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:12}},
+          h('thead',null,h('tr',{style:{background:T.surface2}},['TC ID','Title','Module','Priority','Status','Comment'].map(hd=>h('th',{key:hd,style:{padding:'8px 10px',textAlign:'left',color:T.textMuted,fontWeight:600,borderBottom:`1px solid ${T.border}`,fontSize:11,textTransform:'uppercase',letterSpacing:0.4,whiteSpace:'nowrap'}},hd)))),
+          h('tbody',null,cases.map(c=>{const tc=state.testcases.find(t=>t.id===c.tcId);if(!tc)return null;const mod=state.modules.find(m=>m.id===tc.moduleId);return h('tr',{key:c.tcId,style:{borderBottom:`1px solid ${T.border}`}},
+            h('td',{style:{padding:'7px 10px',fontFamily:'monospace',color:T.blue,fontSize:11,whiteSpace:'nowrap'}},tc.tcId),
+            h('td',{style:{padding:'7px 10px',color:T.text,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},tc.title),
+            h('td',{style:{padding:'7px 10px',color:T.textMuted,whiteSpace:'nowrap'}},mod?.name||'—'),
+            h('td',{style:{padding:'7px 10px'}},h(PriBadge,{p:tc.priority,T})),
+            h('td',{style:{padding:'7px 10px'}},h(StatusBadge,{status:c.status,T,small:true})),
+            h('td',{style:{padding:'7px 10px',color:T.textMuted,fontStyle:'italic',maxWidth:140,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}},c.comment||'—')
+          );}))
+        )
+      )
+    )
+  );
+}
+
+function ReportsView({ state, T }) {
+  const completedRuns = state.runs.filter(r=>r.status==='completed');
+  const S = Sel(T);
+  const [selRun, setSelRun] = useState(()=>completedRuns[0]?.id||null);
+  const run = state.runs.find(r=>r.id===selRun);
+  const exportExcel=(run,state)=>{
+    const wb=XLSX.utils.book_new();
+    const rows=run.cases.map(c=>{const tc=state.testcases.find(t=>t.id===c.tcId)||{};const mod=state.modules.find(m=>m.id===tc.moduleId)||{};const proj=state.projects.find(p=>p.id===tc.projectId)||{};return{'Run Name':run.name,'TC ID':tc.tcId,'Title':tc.title,'Module':mod.name,'Project':proj.name,'Priority':tc.priority,'Status':c.status,'Comment':c.comment,'Executed At':c.executedAt};});
+    const ws=XLSX.utils.json_to_sheet(rows);XLSX.utils.book_append_sheet(wb,ws,'Results');XLSX.writeFile(wb,`Report_${run.name.replace(/\s+/g,'_')}.xlsx`);
+  };
+  if (completedRuns.length===0) return h('div',{style:{padding:40,textAlign:'center',color:T.textMuted}},h('div',{style:{fontSize:40,marginBottom:12}},'📊'),h('div',{style:{fontSize:15,fontWeight:500,color:T.textSec}},'No completed runs yet'),h('div',{style:{fontSize:13,marginTop:4}},'Complete a test run to see reports'));
+  return h('div',{style:{padding:20,maxWidth:1000,margin:'0 auto',overflowY:'auto',height:'100%'}},
+    h('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:18,flexWrap:'wrap',gap:10}},
+      h('h2',{style:{margin:0,fontSize:18,fontWeight:700,color:T.text}},'Reports'),
+      h('div',{style:{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}},
+        h(S,{value:selRun||'',onChange:e=>setSelRun(e.target.value),style:{width:220}},completedRuns.map(r=>h('option',{key:r.id,value:r.id},r.name))),
+        run&&h(Btn,{variant:'outline',T,onClick:()=>exportExcel(run,state),style:{fontSize:12}},'↓ Excel')
+      )
+    ),
+    run&&h(ReportContent,{run,state,T})
+  );
+}
+
+// ─── Excel Import/Export ──────────────────────────────────────────────────────
+function exportToExcel(state) {
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.projects.map(p=>({ID:p.id,Name:p.name,Key:p.key,Description:p.description,CreatedAt:p.createdAt}))),'Projects');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.modules.map(m=>({ID:m.id,ProjectID:m.projectId,Name:m.name,Key:m.key,Description:m.description}))),'Modules');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.testcases.map(tc=>({ID:tc.id,ProjectID:tc.projectId,ModuleID:tc.moduleId,TCID:tc.tcId,Num:tc.num,Title:tc.title,Description:tc.description,Steps:tc.steps,ExpectedResult:tc.expectedResult,Priority:tc.priority,Tags:tc.tags,Status:tc.status}))),'TestCases');
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(state.suites.map(s=>({ID:s.id,Name:s.name,Description:s.description,CreatedAt:s.createdAt,Inclusions:JSON.stringify(s.inclusions)}))),'Suites');
+  const runRows=[];
+  state.runs.forEach(r=>r.cases.forEach(c=>runRows.push({RunID:r.id,RunName:r.name,RunStatus:r.status,CreatedAt:r.createdAt,CompletedAt:r.completedAt||'',TCID:c.tcId,CaseStatus:c.status,Comment:c.comment,ExecutedAt:c.executedAt||''})));
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(runRows.length?runRows:[{note:'No runs yet'}]),'Runs');
+  XLSX.writeFile(wb,'TestFlow_Export.xlsx');
+}
+
+function importFromExcel(file, dispatch) {
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      const wb=XLSX.read(e.target.result,{type:'binary'});
+      const gs=name=>{const ws=wb.Sheets[name];return ws?XLSX.utils.sheet_to_json(ws):[];};
+      const projects=gs('Projects').map(r=>({id:r.ID||uid(),name:r.Name,key:r.Key,description:r.Description||'',createdAt:r.CreatedAt||new Date().toISOString()}));
+      const modules=gs('Modules').map(r=>({id:r.ID||uid(),projectId:r.ProjectID,name:r.Name,key:r.Key,description:r.Description||''}));
+      const testcases=gs('TestCases').map(r=>({id:r.ID||uid(),projectId:r.ProjectID,moduleId:r.ModuleID,tcId:r.TCID,num:r.Num||1,title:r.Title,description:r.Description||'',steps:r.Steps||'',expectedResult:r.ExpectedResult||'',priority:r.Priority||'medium',tags:r.Tags||'',status:r.Status||'active'}));
+      const suites=gs('Suites').map(r=>({id:r.ID||uid(),name:r.Name,description:r.Description||'',createdAt:r.CreatedAt||new Date().toISOString(),inclusions:(()=>{try{return JSON.parse(r.Inclusions||'[]');}catch{return[];}})()}));
+      const runMap={};
+      gs('Runs').forEach(r=>{if(!r.RunID)return;if(!runMap[r.RunID])runMap[r.RunID]={id:r.RunID,name:r.RunName,description:'',suiteIds:[],cases:[],status:r.RunStatus||'active',createdAt:r.CreatedAt||new Date().toISOString(),completedAt:r.CompletedAt||null};runMap[r.RunID].cases.push({tcId:r.TCID,status:r.CaseStatus||'pending',comment:r.Comment||'',executedAt:r.ExecutedAt||null});});
+      dispatch({type:'IMPORT',data:{projects,modules,testcases,suites,runs:Object.values(runMap)}});
+      alert('Import successful!');
+    }catch(err){alert('Import failed: '+err.message);}
+  };
+  reader.readAsBinaryString(file);
+}
+
+// ─── App Shell ────────────────────────────────────────────────────────────────
+const NAV = [
+  {id:'projects',label:'Projects',icon:'📁'},
+  {id:'suites',label:'Suites',icon:'📋'},
+  {id:'runs',label:'Runs',icon:'▶'},
+  {id:'reports',label:'Reports',icon:'📊'},
+];
+
+function App() {
+  const [state, dispatchRaw] = useReducer(reducer, null, makeInitial);
+  const [nav, setNav] = useState('projects');
+  const [dark, setDark] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth<=700);
+  const fileRef = useRef();
+  const T = useMemo(()=>makeTheme(dark), [dark]);
+
+  useEffect(()=>{
+    const onResize=()=>setIsMobile(window.innerWidth<=700);
+    window.addEventListener('resize',onResize);
+    return()=>window.removeEventListener('resize',onResize);
+  },[]);
+
+  const dispatch = useCallback(action=>dispatchRaw(action),[]);
+
+  const totalTCs = state.testcases.length;
+  const completedRuns = state.runs.filter(r=>r.status==='completed').length;
+
+  const topBar = h('div',{style:{background:T.surface,borderBottom:`1px solid ${T.border}`,padding:isMobile?'0 12px':'0 18px',height:isMobile?48:54,display:'flex',alignItems:'center',gap:0,flexShrink:0,zIndex:10}},
+    h('div',{style:{display:'flex',alignItems:'center',gap:8,marginRight:isMobile?12:24}},
+      h('div',{style:{width:28,height:28,background:T.blue,borderRadius:7,display:'flex',alignItems:'center',justifyContent:'center'}},h('span',{style:{fontSize:13,color:'white',fontWeight:700}},'✓')),
+      !isMobile&&h('span',{style:{fontSize:15,fontWeight:700,color:T.text}},'TestFlow')
+    ),
+    h('nav',{style:{display:'flex',gap:2,flex:1}},
+      NAV.map(item=>h('button',{key:item.id,onClick:()=>setNav(item.id),style:{background:nav===item.id?T.navActive:'transparent',border:'none',borderRadius:8,padding:isMobile?'5px 9px':'6px 13px',cursor:'pointer',fontFamily:'inherit',fontSize:isMobile?11:13,fontWeight:nav===item.id?600:500,color:nav===item.id?T.blue:T.textMuted,display:'flex',alignItems:'center',gap:4,outline:'none'}},
+        h('span',null,item.icon),
+        !isMobile&&h('span',null,' ',item.label)
+      ))
+    ),
+    !isMobile&&h('div',{style:{display:'flex',gap:10,fontSize:12,color:T.textMuted,marginRight:12}},
+      h('span',null,state.projects.length,' projects'),
+      h('span',null,totalTCs,' tests'),
+      h('span',null,completedRuns,'/',state.runs.length,' done')
+    ),
+    h('div',{style:{display:'flex',gap:5,alignItems:'center'}},
+      h(Btn,{variant:'ghost',T,onClick:()=>setDark(d=>!d),style:{padding:'5px 8px',fontSize:16},title:dark?'Light mode':'Dark mode'},dark?'☀':'🌙'),
+      !isMobile&&h(Btn,{variant:'outline',T,style:{fontSize:12},onClick:()=>exportToExcel(state)},'↑ Export'),
+      !isMobile&&h(Btn,{variant:'outline',T,style:{fontSize:12},onClick:()=>fileRef.current.click()},'↓ Import'),
+      isMobile&&h(Btn,{variant:'ghost',T,style:{padding:'5px 8px',fontSize:14},onClick:()=>exportToExcel(state),title:'Export'},'↑'),
+      isMobile&&h(Btn,{variant:'ghost',T,style:{padding:'5px 8px',fontSize:14},onClick:()=>fileRef.current.click(),title:'Import'},'↓'),
+      h('input',{ref:fileRef,type:'file',accept:'.xlsx',style:{display:'none'},onChange:e=>{if(e.target.files[0])importFromExcel(e.target.files[0],dispatch);e.target.value='';}})
+    )
+  );
+
+  const footer = h('div',{style:{background:T.surface,borderTop:`1px solid ${T.border}`,padding:'6px 18px',display:'flex',justifyContent:'center',alignItems:'center',flexShrink:0}},
+    h('span',{style:{fontSize:11,color:T.textMuted}},'Built by ',h('strong',{style:{color:T.textSec}},'Joseph'),', ',h('strong',{style:{color:T.textSec}},'Akhil'))
+  );
+
+  return h('div',{className:dark?'dark':'light',style:{fontFamily:"'Segoe UI',system-ui,-apple-system,sans-serif",height:'100vh',display:'flex',flexDirection:'column',background:T.bg,color:T.text}},
+    topBar,
+    h('div',{style:{flex:1,overflow:'hidden'}},
+      nav==='projects'&&h(ProjectsView,{state,dispatch,T,isMobile}),
+      nav==='suites'&&h('div',{style:{height:'100%',overflowY:'auto'}},h(SuitesView,{state,dispatch,T})),
+      nav==='runs'&&h('div',{style:{height:'100%',overflowY:'auto'}},h(RunsView,{state,dispatch,T,isMobile})),
+      nav==='reports'&&h('div',{style:{height:'100%',overflowY:'auto'}},h(ReportsView,{state,T}))
+    ),
+    footer
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(h(App));
+</script>
+</body>
+</html>
